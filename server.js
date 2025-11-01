@@ -1,39 +1,78 @@
-// Get the packages we need
-var express = require('express'),
-    router = express.Router(),
-    mongoose = require('mongoose'),
-    bodyParser = require('body-parser');
-
-// Read .env file
 require('dotenv').config();
+const express = require('express');
+const mongoose = require('mongoose');
 
-// Create our Express application
-var app = express();
+const usersRouter = require('./routes/users');
+const tasksRouter  = require('./routes/tasks');
 
-// Use environment defined port or 3000
-var port = process.env.PORT || 3000;
+const app = express();
 
-// Connect to a MongoDB --> Uncomment this once you have a connection string!!
-//mongoose.connect(process.env.MONGODB_URI,  { useNewUrlParser: true });
+app.use(express.json());
 
-// Allow CORS so that backend and frontend could be put on different servers
-var allowCrossDomain = function (req, res, next) {
-    res.header("Access-Control-Allow-Origin", "*");
-    res.header("Access-Control-Allow-Headers", "X-Requested-With, X-HTTP-Method-Override, Content-Type, Accept");
-    res.header("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, OPTIONS");
-    next();
-};
-app.use(allowCrossDomain);
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 
-// Use the body-parser package in our application
-app.use(bodyParser.urlencoded({
-    extended: true
-}));
-app.use(bodyParser.json());
+app.use('/api/users', usersRouter);
+app.use('/api/tasks', tasksRouter);
 
-// Use routes as a module (see index.js)
-require('./routes')(app, router);
+app.use("/users", usersRouter);
+app.use("/tasks", tasksRouter);
 
-// Start the server
-app.listen(port);
-console.log('Server running on port ' + port);
+
+app.get('/health', (req, res) => {
+  res.status(200).json({ message: 'OK', data: { uptime: process.uptime() } });
+});
+
+app.use((err, req, res, next) => {
+  if (err?.code === 11000) {
+    return res.status(400).json({
+      message: 'Duplicate key',
+      data: { keys: Object.keys(err.keyPattern || {}) }
+    });
+  }
+  if (err?.name === 'CastError') {
+    return res.status(400).json({
+      message: 'Invalid id format',
+      data: {}
+    });
+  }
+  if (err?.name === 'ValidationError') {
+    const fields = Object.values(err.errors || {}).map(e => ({
+      field: e.path,
+      message: e.kind === 'required' ? 'required' : (e.message || 'invalid')
+    }));
+    return res.status(400).json({
+      message: 'Validation failed',
+      data: { fields }
+    });
+  }
+  const status = err.status || 500;
+  return res.status(status).json({
+    message: status === 500 ? 'Server error' : 'Request error',
+    data: {}
+  });
+});
+
+
+const MONGODB_URI = process.env.MONGODB_URI;
+const PORT = process.env.PORT || 3000;
+
+if (!MONGODB_URI) {
+  console.error('Missing MONGODB_URI in environment variables');
+  process.exit(1);
+}
+
+mongoose.connect(MONGODB_URI, { autoIndex: true })
+  .then(() => {
+    console.log('MongoDB connected');
+    app.listen(PORT, () => console.log(`Server listening on http://localhost:${PORT}`));
+  })
+  .catch((err) => {
+    console.error('MongoDB connection error:', err.message);
+    process.exit(1);
+  });
